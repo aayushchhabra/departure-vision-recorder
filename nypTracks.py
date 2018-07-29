@@ -1,99 +1,65 @@
-from rx import Observable, Observer
-from rx.core import Scheduler
+from datetime import datetime
+from datetime import timedelta
+from http.client import RemoteDisconnected
 
+import lib.details_page_page_utils as details_page
+import lib.details_page_parse_utils as details_parse
 import lib.page_utils as page
 import lib.parse_utils as parse
-from lib.repo import Repo, Event
+from lib.shuttle_utils import get_shuttle_before
 
-import sys
-import os
 
-def determine_change(old, new):
-    changes = []
-    for i, k in enumerate(old.__dict__):
-        if k == 'at':
+def get_time_to_leave(trains):
+    for train in trains:
+        now = datetime.now()
+        departs_at_arr = train.departs_at.split(':')
+        add_number = 12
+        if int(departs_at_arr[0]) == 12:
+            add_number = 0
+        train_time = now.replace(hour=add_number + int(departs_at_arr[0]), minute=int(departs_at_arr[1]))
+
+        shuttle_departs_before = train_time - timedelta(minutes=9) + timedelta(minutes=5)
+        if shuttle_departs_before < now:
             continue
-        if new.__dict__.get(k) != old.__dict__.get(k):
-            changes.append(k)
-    if len(changes) == 0:
-        return None
-    context = "::".join(changes)
-    return Event.changed_departure(context, old, new)
+        shuttle_time = get_shuttle_before(shuttle_departs_before)
+        if shuttle_time == None:
+            continue
+        leave_at = shuttle_time - timedelta(minutes=5)
+        if leave_at < now:
+            continue
+        return (leave_at, shuttle_time, train_time)
 
-def find_offset(old, new):
-    for i, dep in enumerate(new):
-        if dep.train_id == old[0].train_id:
-            return i
-    return len(new)
-
-def changes_as_events(old_departures, new_departures):
-    added = []
-    dropped = []
-    changed = []
-    for d in new_departures:
-        try:
-            index = old_departures.index(d)
-            old = old_departures[index]
-            if old.changed(d):
-                changed.append((old, d))
-        except ValueError:
-            added.append(d)
-
-    for d in old_departures:
-        try:
-            index = new_departures.index(d)
-        except ValueError:
-            dropped.append(d)
-
-    events = [Event.new_departure(a) for a in added]
-    events += [Event.dropped_departure(d) for d in dropped]
-    events += [determine_change(old, new) for old, new in changed]
-    return events
-
-
-class DepartureStorage(Observer):
-    def __init__(self):
-        self.last_departures = []
-
-    def on_next(self, departures):
-        events = changes_as_events(self.last_departures, departures)
-        for event in events:
-            repo.save_event(event)
-        self.last_departures = departures
-
-    def on_completed(self):
-        print("Done")
-
-    def on_error(self, error):
-        print("Error getting departures: %s" % error)
-        sys.exit(1)
-
-
-
-def get_departures():
+def get_departures(destination = 'Trenton', max_stops = 9):
     html, timestamp = page.get_dv_page(skip_cache=True)
-    departures = parse.list_departures(html, timestamp)
-    return departures
+    trains_to = parse.list_departures(html, timestamp)
+    return filter_express (trains_to, destination, max_stops)
 
-def db_host_port():
+def filter_express (trains_to, destination = 'Trenton', max_stops = 9):
+    result = []
+    departures_to_destination = filter(lambda train_to: train_to.dest == destination, trains_to)
+    for departure in departures_to_destination:
+        html = details_page.fetch_dv_page(departure.train_id)
+        stations = details_parse.get_stations(html)
+        if len(stations) < max_stops:
+            result.append(departure)
+    return result
+
+def main(event, context):
+    retry_count = 0
     try:
-        host = os.environ['DB_HOST']
-    except KeyError:
-        host = "localhost"
-    try:
-        port = os.environ['DB_PORT']
-    except KeyError:
-        port = 5984
-    return (host, port) 
+        departures = get_departures('Trenton\xa0✈', 20)
+        (leave_at, shuttle_time, train_time) = get_time_to_leave(departures)
+        result = "leave at {} \ntake shuttle at {} \ntake train at {}"
+        print(result.format(leave_at, shuttle_time, train_time))
+        return type(leave_at.strftime("%Y-%m-%d %H:%M"))
+    except RemoteDisconnected:
+        if ++retry_count < 3:
+            print("Remote disconnected, trying again.")
+            main(event, context)
+        else:
+            print("Max retry count reached....Exiting")
+            exit(-1)
 
-if __name__=="__main__":
-    db_host, port = db_host_port()
-    repo = Repo(db_host, port)
-    repo.connect("nyp_departure_events")
 
-    source = Observable\
-        .timer(200, 120000, Scheduler.thread_pool)\
-        .map(lambda _: get_departures())\
-        .subscribe(DepartureStorage())
-
-    Scheduler.thread_pool.executor.shutdown() 
+if __name__ == '__main__':
+    print(type(datetime.now().strftime("%Y-%m-%d %H:%M")))

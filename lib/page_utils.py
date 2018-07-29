@@ -4,7 +4,7 @@ from datetime import datetime
 import dateutil.parser as dup
 
 DV_BASE="http://dv.njtransit.com/mobile/tid-mobile.aspx?sid="
-NYP="NY"
+NYP="NP"
 CACHE_PATH="dv_data"
 
 
@@ -23,7 +23,7 @@ def cache_dv_page(page, station=NYP, path=CACHE_PATH):
         f.write(page)
     return os.path.join(path, name)
 
-def get_dv_page(cache_path=CACHE_PATH, skip_cache=False):
+def get_dv_page(cache_path=CACHE_PATH, skip_cache=True):
     """Fetches the latest cached file or pulls from the web
 
     Args:
@@ -46,12 +46,10 @@ def get_dv_page(cache_path=CACHE_PATH, skip_cache=False):
             pass
 
     html = fetch_dv_page()
-    latest = cache_dv_page(html, path=cache_path)
+    # latest = cache_dv_page(html, path=cache_path)
     return (html, datetime.today())
 
 def extract_timestamp(filename):
     _, station, iso = filename.split("_")
     iso = iso.split(".")[0]
     return dup.parse(iso)
-
-
